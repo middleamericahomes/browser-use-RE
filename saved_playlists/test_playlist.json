@@ -1,0 +1,19 @@
+{
+  "name": "Test Playlist",
+  "description": "A test playlist",
+  "tasks": [
+    "search_google",
+    "take_screenshot",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "google test"
+  ],
+  "created_at": "2025-03-08T14:32:28.243965",
+  "updated_at": "2025-03-08T14:32:28.243980"
+}
