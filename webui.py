@@ -13,6 +13,7 @@ import os
 logger = logging.getLogger(__name__)
 
 import gradio as gr
+from gradio import themes
 
 from browser_use.agent.service import Agent
 from playwright.async_api import async_playwright
@@ -33,7 +34,19 @@ from src.browser.custom_context import BrowserContextConfig, CustomBrowserContex
 from src.controller.custom_controller import CustomController
 from gradio.themes import Citrus, Default, Glass, Monochrome, Ocean, Origin, Soft, Base
 from src.utils.default_config_settings import default_config, load_config_from_file, save_config_to_file, save_current_config, update_ui_from_config
-from src.utils.utils import update_model_dropdown, get_latest_files, capture_screenshot
+from src.utils.utils import update_model_dropdown, get_latest_files, capture_screenshot, save_task, load_tasks, delete_task
+from src.utils.playlist_utils import (
+    load_saved_playlists_for_ui,
+    load_selected_playlist_for_ui,
+    save_current_playlist_for_ui,
+    delete_selected_playlist_for_ui,
+    add_task_to_playlist_for_ui,
+    remove_task_from_playlist_for_ui,
+    move_task_up_for_ui,
+    move_task_down_for_ui,
+    update_available_tasks_for_ui,
+    play_playlist_for_ui
+)
 
 
 # Global variables for persistence
@@ -74,7 +87,8 @@ async def stop_agent():
 
     try:
         # Request stop
-        _global_agent.stop()
+        if _global_agent is not None:
+            _global_agent.stop()
 
         # Update UI immediately
         message = "Stop requested - the agent will halt at the next safe point"
@@ -637,14 +651,14 @@ async def run_with_stream(
 
 # Define the theme map globally
 theme_map = {
-    "Default": Default(),
-    "Soft": Soft(),
-    "Monochrome": Monochrome(),
-    "Glass": Glass(),
-    "Origin": Origin(),
-    "Citrus": Citrus(),
-    "Ocean": Ocean(),
-    "Base": Base()
+    "Default": Default,
+    "Soft": Soft,
+    "Monochrome": Monochrome,
+    "Glass": Glass,
+    "Origin": Origin,
+    "Citrus": Citrus,
+    "Ocean": Ocean,
+    "Base": Base
 }
 
 async def close_global_browser():
@@ -685,25 +699,20 @@ async def run_deep_search(research_task, max_search_iteration_input, max_query_p
     
 
 def create_ui(config, theme_name="Ocean"):
+    # Get the theme class
+    theme_instance = theme_name
+    
     css = """
+    /* Custom CSS */
     .gradio-container {
         max-width: 1200px !important;
-        margin: auto !important;
-        padding-top: 20px !important;
-    }
-    .header-text {
-        text-align: center;
-        margin-bottom: 30px;
-    }
-    .theme-section {
-        margin-bottom: 20px;
-        padding: 15px;
-        border-radius: 10px;
+        margin-left: auto !important;
+        margin-right: auto !important;
     }
     """
-
+    
     with gr.Blocks(
-            title="Browser Use WebUI", theme=theme_map[theme_name], css=css
+            title="Browser Use WebUI", theme=theme_instance, css=css
     ) as demo:
         with gr.Row():
             gr.Markdown(
@@ -879,6 +888,35 @@ def create_ui(config, theme_name="Ocean"):
                     )
 
             with gr.TabItem("🤖 Run Agent", id=4):
+                # Add saved tasks section
+                with gr.Row():
+                    with gr.Column(scale=3):
+                        saved_tasks_dropdown = gr.Dropdown(
+                            label="Saved Tasks",
+                            choices=[],
+                            info="Select a saved task to load",
+                            interactive=True,
+                        )
+                    with gr.Column(scale=1):
+                        refresh_tasks_button = gr.Button("🔄 Refresh")
+                    with gr.Column(scale=1):
+                        delete_task_button = gr.Button("🗑️ Delete")
+                
+                with gr.Row():
+                    task_name_input = gr.Textbox(
+                        label="Task Name",
+                        placeholder="Enter a name for this task...",
+                        info="Name to identify this task when saved",
+                    )
+                    save_task_button = gr.Button("💾 Save Task")
+                
+                # Add feedback message
+                task_feedback = gr.Textbox(
+                    label="Status",
+                    interactive=False,
+                    visible=True
+                )
+                
                 task = gr.Textbox(
                     label="Task Description",
                     lines=4,
@@ -902,8 +940,268 @@ def create_ui(config, theme_name="Ocean"):
                         value="<h1 style='width:80vw; height:50vh'>Waiting for browser session...</h1>",
                         label="Live Browser View",
                 )
+                
+                # Function to load saved tasks into the dropdown
+                def load_saved_tasks():
+                    tasks = load_tasks()
+                    task_names = [task["name"] for task in tasks]
+                    return gr.update(choices=task_names)
+                
+                # Function to load a selected task
+                def load_selected_task(task_name):
+                    if not task_name:
+                        return "", "", "No task selected"
+                    
+                    tasks = load_tasks()
+                    selected_task = next((task for task in tasks if task["name"] == task_name), None)
+                    
+                    if selected_task:
+                        return selected_task["description"], selected_task.get("additional_info", ""), f"Loaded task: {task_name}"
+                    return "", "", "Task not found"
+                
+                # Function to save the current task
+                def save_current_task(task_name, task_description, additional_info):
+                    if not task_name or not task_description:
+                        return gr.update(), "Please provide both a task name and description"
+                    
+                    success = save_task(task_name, task_description, additional_info)
+                    
+                    if success:
+                        # Refresh the dropdown
+                        tasks = load_tasks()
+                        task_names = [task["name"] for task in tasks]
+                        return gr.update(choices=task_names, value=task_name), f"Task '{task_name}' saved successfully!"
+                    else:
+                        return gr.update(), "Failed to save task"
+                
+                # Function to delete a task
+                def delete_selected_task(task_name):
+                    if not task_name:
+                        return gr.update(), "No task selected"
+                    
+                    success = delete_task(task_name)
+                    
+                    if success:
+                        # Refresh the dropdown
+                        tasks = load_tasks()
+                        task_names = [task["name"] for task in tasks]
+                        return gr.update(choices=task_names, value=None), f"Task '{task_name}' deleted successfully!"
+                    else:
+                        return gr.update(), "Failed to delete task"
+                
+                # Connect event handlers
+                refresh_tasks_button.click(
+                    fn=load_saved_tasks,
+                    inputs=[],
+                    outputs=[saved_tasks_dropdown]
+                )
+                
+                saved_tasks_dropdown.change(
+                    fn=load_selected_task,
+                    inputs=[saved_tasks_dropdown],
+                    outputs=[task, add_infos, task_feedback]
+                )
+                
+                save_task_button.click(
+                    fn=save_current_task,
+                    inputs=[task_name_input, task, add_infos],
+                    outputs=[saved_tasks_dropdown, task_feedback]
+                )
+                
+                delete_task_button.click(
+                    fn=delete_selected_task,
+                    inputs=[saved_tasks_dropdown],
+                    outputs=[saved_tasks_dropdown, task_feedback]
+                )
+                
+                # Initialize saved tasks dropdown with existing tasks
+                try:
+                    tasks = load_tasks()
+                    if tasks:
+                        saved_tasks_dropdown.choices = [(task["name"], task["name"]) for task in tasks]
+                except Exception as e:
+                    logger.error(f"Error initializing saved tasks dropdown: {str(e)}")
             
-            with gr.TabItem("🧐 Deep Research", id=5):
+            with gr.TabItem("🎮 Task Playlists", id=5):
+                # Playlist management
+                with gr.Row():
+                    with gr.Column(scale=3):
+                        playlist_name_input = gr.Textbox(
+                            label="Playlist Name",
+                            placeholder="Enter a name for your playlist",
+                            interactive=True
+                        )
+                    with gr.Column(scale=1):
+                        save_playlist_button = gr.Button("💾 Save Playlist")
+                
+                with gr.Row():
+                    with gr.Column(scale=3):
+                        playlist_description_input = gr.Textbox(
+                            label="Description",
+                            placeholder="Enter a description for your playlist",
+                            interactive=True
+                        )
+                
+                # Initialize playlists
+                playlists = load_saved_playlists_for_ui()
+                logger.info(f"Initialized playlist dropdown with {len(playlists)} playlists")
+                
+                with gr.Row():
+                    with gr.Column(scale=3):
+                        playlist_dropdown = gr.Dropdown(
+                            label="Saved Playlists",
+                            choices=playlists,
+                            value=None,  # Start with no selection
+                            info="Select a playlist to load",
+                            interactive=True,
+                            allow_custom_value=False,
+                        )
+                    with gr.Column(scale=1):
+                        with gr.Row():
+                            refresh_playlists_button = gr.Button("🔄 Refresh")
+                            load_playlist_button = gr.Button("📂 Load")
+                    with gr.Column(scale=1):
+                        delete_playlist_button = gr.Button("🗑️ Delete")
+                
+                # Playlist status message
+                playlist_feedback = gr.Textbox(
+                    label="Status",
+                    interactive=False,
+                    visible=True
+                )
+                
+                with gr.Row():
+                    with gr.Column(scale=3):
+                        # Use regular Dataframe instead of CustomDataFrameComponent
+                        playlist_tasks = gr.Dataframe(
+                            headers=["Task Name", "Description"],
+                            datatype=["str", "str"],
+                            row_count=10,
+                            col_count=(2, "fixed"),
+                            interactive=False,
+                            wrap=True
+                        )
+                    with gr.Column(scale=1):
+                        with gr.Row():
+                            move_up_button = gr.Button("⬆️ Move Up")
+                        with gr.Row():
+                            move_down_button = gr.Button("⬇️ Move Down")
+                        with gr.Row():
+                            remove_task_button = gr.Button("❌ Remove")
+                
+                # Available tasks to add to playlist
+                with gr.Row():
+                    with gr.Column(scale=3):
+                        available_tasks_dropdown = gr.Dropdown(
+                            label="Available Tasks",
+                            choices=[],
+                            value=None,  # Start with no selection
+                            info="Select a task to add to the playlist",
+                            interactive=True,
+                            allow_custom_value=False,
+                        )
+                    with gr.Column(scale=1):
+                        refresh_tasks_button = gr.Button("🔄 Refresh Tasks")
+                        add_to_playlist_button = gr.Button("➕ Add to Playlist")
+                
+                # Playlist controls
+                with gr.Row():
+                    play_playlist_button = gr.Button("▶️ Play Playlist", variant="primary", scale=2)
+                    stop_playlist_button = gr.Button("⏹️ Stop", variant="stop", scale=1)
+                
+                # Current task display
+                current_task_display = gr.Textbox(
+                    label="Current Task",
+                    interactive=False,
+                    visible=True
+                )
+                
+                # Connect event handlers
+                refresh_playlists_button.click(
+                    fn=load_saved_playlists_for_ui,
+                    inputs=[],
+                    outputs=[playlist_dropdown]
+                )
+                
+                load_playlist_button.click(
+                    fn=load_selected_playlist_for_ui,
+                    inputs=[playlist_dropdown],
+                    outputs=[playlist_tasks, playlist_name_input, playlist_description_input, playlist_feedback]
+                )
+                
+                save_playlist_button.click(
+                    fn=save_current_playlist_for_ui,
+                    inputs=[playlist_name_input, playlist_description_input, playlist_tasks],
+                    outputs=[playlist_dropdown, playlist_feedback, playlist_tasks]
+                )
+                
+                delete_playlist_button.click(
+                    fn=delete_selected_playlist_for_ui,
+                    inputs=[playlist_dropdown],
+                    outputs=[playlist_dropdown, playlist_feedback]
+                )
+                
+                # Initialize available tasks dropdown
+                refresh_tasks_button.click(
+                    fn=update_available_tasks_for_ui,
+                    inputs=[],
+                    outputs=[available_tasks_dropdown]
+                )
+                
+                # Add task to playlist
+                add_to_playlist_button.click(
+                    fn=add_task_to_playlist_for_ui,
+                    inputs=[available_tasks_dropdown, playlist_tasks],
+                    outputs=[playlist_tasks, playlist_feedback]
+                )
+                
+                # Remove task from playlist
+                remove_task_button.click(
+                    fn=remove_task_from_playlist_for_ui,
+                    inputs=[gr.State(0), playlist_tasks],  # Default to first task
+                    outputs=[playlist_tasks, playlist_feedback]
+                )
+                
+                # Move task up
+                move_up_button.click(
+                    fn=move_task_up_for_ui,
+                    inputs=[gr.State(0), playlist_tasks],  # Default to first task
+                    outputs=[playlist_tasks, playlist_feedback]
+                )
+                
+                # Move task down
+                move_down_button.click(
+                    fn=move_task_down_for_ui,
+                    inputs=[gr.State(0), playlist_tasks],  # Default to first task
+                    outputs=[playlist_tasks, playlist_feedback]
+                )
+                
+                # Play playlist
+                play_playlist_button.click(
+                    fn=play_playlist_for_ui,
+                    inputs=[
+                        playlist_tasks,
+                        agent_type, llm_provider, llm_model_name, llm_num_ctx, llm_temperature, llm_base_url, llm_api_key,
+                        use_own_browser, keep_browser_open, headless, disable_security, window_w, window_h,
+                        save_recording_path, save_agent_history_path, save_trace_path,
+                        enable_recording, max_steps, use_vision, max_actions_per_step, tool_calling_method
+                    ],
+                    outputs=[
+                        current_task_display,
+                        play_playlist_button,
+                        stop_playlist_button,
+                        playlist_feedback
+                    ]
+                )
+                
+                # Stop playlist
+                stop_playlist_button.click(
+                    fn=stop_agent,
+                    inputs=[],
+                    outputs=[playlist_feedback, stop_playlist_button, play_playlist_button]
+                )
+            
+            with gr.TabItem("🧐 Deep Research", id=6):
                 research_task_input = gr.Textbox(label="Research Task", lines=5, value="Compose a report on the use of Reinforcement Learning for training Large Language Models, encompassing its origins, current advancements, and future prospects, substantiated with examples of relevant models and techniques. The report should reflect original insights and analysis, moving beyond mere summarization of existing literature.")
                 with gr.Row():
                     max_search_iteration_input = gr.Number(label="Max Search Iteration", value=3, precision=0) # precision=0 确保是整数
@@ -915,7 +1213,7 @@ def create_ui(config, theme_name="Ocean"):
                 markdown_download = gr.File(label="Download Research Report")
 
 
-            with gr.TabItem("📊 Results", id=6):
+            with gr.TabItem("📊 Results", id=7):
                 with gr.Group():
 
                     recording_display = gr.Video(label="Latest Recording")
@@ -987,7 +1285,7 @@ def create_ui(config, theme_name="Ocean"):
                     outputs=[stop_research_button, research_button],
                 )
 
-            with gr.TabItem("🎥 Recordings", id=7):
+            with gr.TabItem("🎥 Recordings", id=8):
                 def list_recordings(save_recording_path):
                     if not os.path.exists(save_recording_path):
                         return []
@@ -1021,7 +1319,7 @@ def create_ui(config, theme_name="Ocean"):
                     outputs=recordings_gallery
                 )
             
-            with gr.TabItem("📁 Configuration", id=8):
+            with gr.TabItem("📁 Configuration", id=9):
                 with gr.Group():
                     config_file_input = gr.File(
                         label="Load Config File",
@@ -1082,16 +1380,32 @@ def create_ui(config, theme_name="Ocean"):
 
     return demo
 
-def main():
-    parser = argparse.ArgumentParser(description="Gradio UI for Browser Agent")
+def parse_args():
+    """
+    Parse command-line arguments for the web UI.
+    
+    Returns:
+        argparse.Namespace: Parsed command-line arguments
+    """
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Browser Use Web UI")
+    parser.add_argument("--theme", type=str, default="Ocean", help="Theme for the UI")
+    parser.add_argument("--config", type=str, default="config.json", help="Path to config file")
     parser.add_argument("--ip", type=str, default="127.0.0.1", help="IP address to bind to")
     parser.add_argument("--port", type=int, default=7788, help="Port to listen on")
-    parser.add_argument("--theme", type=str, default="Ocean", choices=theme_map.keys(), help="Theme to use for the UI")
-    parser.add_argument("--dark-mode", action="store_true", help="Enable dark mode")
-    args = parser.parse_args()
+    
+    return parser.parse_args()
 
+def main():
+    # Parse command line arguments
+    args = parse_args()
+    
+    # Load config
     config_dict = default_config()
-
+    if os.path.exists(args.config):
+        config_dict = load_config_from_file(args.config)
+    
     demo = create_ui(config_dict, theme_name=args.theme)
     demo.launch(server_name=args.ip, server_port=args.port)
 
