@@ -2476,7 +2476,7 @@ def create_ui(config, theme_name="Ocean"):
                 except Exception as e:
                     logging.error(f"Error exporting agent logs: {str(e)}")
                     return f"Error exporting logs: {str(e)}"
-                
+            
             def export_comprehensive_logs():
                 """
                 Export comprehensive logs including terminal output, agent actions, web page info,
@@ -2667,7 +2667,7 @@ def create_ui(config, theme_name="Ocean"):
                 except Exception as e:
                     logging.error(f"Error exporting comprehensive logs: {str(e)}")
                     return f"Error exporting comprehensive logs: {str(e)}"
-        
+
         # Function to update the extracted data with filtering
         def update_extracted_data(data_type="all", data_source="all", search_term=""):
             """
