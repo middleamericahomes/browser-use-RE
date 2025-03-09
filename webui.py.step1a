@@ -690,7 +690,7 @@ agent_tracker_handler.setFormatter(logging.Formatter('%(message)s'))
 logging.getLogger('src.agent.custom_agent').addHandler(agent_tracker_handler)
 
 # Create and add the agent tracker handler
-agent_tracker_handler = AgentTrackerLogHandler()
+agent_tracker_handler = AgentTrackerLogHandler()  # Using the defined class instead of the undefined implementation
 
 # Add the data handler to relevant loggers
 controller_logger = logging.getLogger('controller')
@@ -1718,13 +1718,6 @@ def create_ui(config, theme_name="Ocean"):
                 # Add feedback message
                 task_feedback = gr.Textbox(label="", visible=False)
                 
-                # Add task name input field
-                task_name_input = gr.Textbox(
-                    label="✏️ Task Name",
-                    placeholder="Enter a name for this task",
-                    info="A short descriptive name for the task"
-                )
-                
                 with gr.Row():
                     with gr.Column(scale=2):
                                 task = gr.Textbox(
@@ -2209,30 +2202,26 @@ def create_ui(config, theme_name="Ocean"):
         # Function to load selected task template
         def load_task_template(template_name):
             if not template_name:
-                return "", "", ""
+                return "", ""
             
             tasks = load_tasks()
             for task in tasks:
                 if task["name"] == template_name:
-                    return task["name"], task.get("description", ""), task.get("additional_info", "")
+                    return task.get("description", ""), task.get("additional_info", "")
             
-            return "", "", ""
+            return "", ""
         
         # Function to save current task
-        def save_current_task(task_name, task_description, additional_info):
+        def save_current_task(task_description, additional_info):
             if not task_description.strip():
                 return gr.Textbox(value="Task description cannot be empty", visible=True), gr.Dropdown(choices=[])
             
-            # Use provided task name or generate from description if empty
-            final_task_name = task_name.strip() if task_name.strip() else task_description.split("\n")[0][:50]
-            if len(final_task_name) >= 50:
-                final_task_name = final_task_name[:47] + "..."
-            
-            save_task(final_task_name, task_description, additional_info)
+            task_name = task_description.split("\n")[0][:50]  # Use first line as name, limit to 50 chars
+            save_task(task_name, task_description, additional_info)
             
             # Update dropdown
             tasks = load_tasks()
-            return gr.Textbox(value=f"Task '{final_task_name}' saved successfully"), gr.Dropdown(choices=[task["name"] for task in tasks])
+            return gr.Textbox(value=f"Task '{task_name}' saved successfully"), gr.Dropdown(choices=[task["name"] for task in tasks])
         
         # Connect event handlers for task templates
         refresh_templates_button.click(
@@ -2244,12 +2233,12 @@ def create_ui(config, theme_name="Ocean"):
         task_template_dropdown.change(
             fn=load_task_template,
             inputs=[task_template_dropdown],
-            outputs=[task_name_input, task, add_infos]
+            outputs=[task, add_infos]
         )
         
         save_task_button.click(
             fn=save_current_task,
-            inputs=[task_name_input, task, add_infos],
+            inputs=[task, add_infos],
             outputs=[task_feedback, task_template_dropdown]
         )
         
@@ -2678,36 +2667,7 @@ def create_ui(config, theme_name="Ocean"):
                 except Exception as e:
                     logging.error(f"Error exporting comprehensive logs: {str(e)}")
                     return f"Error exporting comprehensive logs: {str(e)}"
-        # Function to update extracted data based on filters
-        def update_extracted_data(data_type, data_source, search_term):
-            """Return filtered extracted data along with updated dropdown choices for types and sources."""
-            try:
-                # Get all data and metadata
-                all_data = extracted_data_collector.get_data()
-                metadata = extracted_data_collector.get_metadata()
                 
-                # If no filters are applied, use all data
-                if data_type == "all" and data_source == "all" and not search_term.strip():
-                    filtered_data = all_data
-                else:
-                    filtered_data = all_data
-                    if data_type != "all":
-                        filtered_data = [item for item in filtered_data if item.get("type") == data_type]
-                    if data_source != "all":
-                        filtered_data = [item for item in filtered_data if item.get("source") == data_source]
-                    if search_term.strip():
-                        st = search_term.lower()
-                        filtered_data = [item for item in filtered_data if st in str(item).lower()]
-                
-                # Prepare dropdown updates based on metadata
-                type_update = gr.Dropdown.update(choices=metadata.get("types", []))
-                source_update = gr.Dropdown.update(choices=metadata.get("sources", []))
-                
-                return filtered_data, metadata, type_update, source_update
-            except Exception as e:
-                logging.error(f"Error in update_extracted_data: {str(e)}")
-                return [], {"types": [], "sources": []}, gr.Dropdown.update(choices=[]), gr.Dropdown.update(choices=[])
-        
         # Connect the update button to the extracted data with filtering
         update_extracted_data_button.click(
             fn=update_extracted_data,
@@ -2737,7 +2697,15 @@ def create_ui(config, theme_name="Ocean"):
         # Function to export extracted data
         def export_extracted_data(data_type, data_source, search_term):
             # Get filtered data
-            filtered_data, _ = update_extracted_data(data_type, data_source, search_term)
+            filtered_data = extracted_data_collector.get_data()
+            
+            # Apply basic filtering if needed
+            if data_type and data_type != "all":
+                filtered_data = [item for item in filtered_data if item.get("type") == data_type]
+            if data_source and data_source != "all":
+                filtered_data = [item for item in filtered_data if item.get("source") == data_source]
+            if search_term:
+                filtered_data = [item for item in filtered_data if search_term.lower() in json.dumps(item).lower()]
             
             try:
                 # Create a timestamp for the filename
@@ -3723,7 +3691,7 @@ class AgentTracker:
 
 
 # Custom log interceptor to feed data to the agent tracker
-class AgentTrackerLogHandler(logging.Handler):
+class AgentTrackerLogHandlerImpl(logging.Handler):
     def __init__(self):
         super().__init__()
         self.setLevel(logging.INFO)

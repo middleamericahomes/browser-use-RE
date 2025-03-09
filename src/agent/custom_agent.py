@@ -140,6 +140,10 @@ class CustomAgent(Agent):
             self.use_deepseek_r1 = True
             # deepseek-reasoner only support 64000 context
             self.max_input_tokens = 64000
+        elif "qwq-32b" in self.model_name.lower():
+            # QWQ-32B supports a much larger context window
+            self.use_deepseek_r1 = False
+            self.max_input_tokens = 131000  # Conservative limit below max of 131,072
         else:
             self.use_deepseek_r1 = False
 
@@ -238,8 +242,27 @@ class CustomAgent(Agent):
             ai_content = ai_message.content
 
         ai_content = ai_content.replace("```json", "").replace("```", "")
-        ai_content = repair_json(ai_content)
-        parsed_json = json.loads(ai_content)
+        
+        # Add QWQ-specific handling
+        if "qwq-32b" in self.model_name.lower():
+            from src.utils.llm import parse_json_response
+            
+            # Check for extremely long responses (QWQ can sometimes generate these)
+            if len(ai_content) > 50000:
+                logger.warning("QWQ-32B generated an extremely long response, truncating...")
+                ai_content = ai_content[:50000]
+            
+            # Parse the JSON response
+            parsed_json = parse_json_response(ai_content)
+            if not parsed_json:
+                # If parsing failed, try standard repair
+                ai_content = repair_json(ai_content)
+                parsed_json = json.loads(ai_content)
+        else:
+            # Standard handling for other models
+            ai_content = repair_json(ai_content)
+            parsed_json = json.loads(ai_content)
+            
         parsed: AgentOutput = self.AgentOutput(**parsed_json)
 
         if parsed is None:

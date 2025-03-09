@@ -4,6 +4,10 @@ import time
 from pathlib import Path
 from typing import Dict, Optional
 import requests
+import json
+import glob
+import datetime
+import logging
 
 from langchain_anthropic import ChatAnthropic
 from langchain_mistralai import ChatMistralAI
@@ -14,6 +18,9 @@ import gradio as gr
 
 from .llm import DeepSeekR1ChatOpenAI, DeepSeekR1ChatOllama
 
+# Get logger
+logger = logging.getLogger(__name__)
+
 PROVIDER_DISPLAY_NAMES = {
     "openai": "OpenAI",
     "azure_openai": "Azure OpenAI",
@@ -21,7 +28,8 @@ PROVIDER_DISPLAY_NAMES = {
     "deepseek": "DeepSeek",
     "google": "Google",
     "alibaba": "Alibaba",
-    "moonshot": "MoonShot"
+    "moonshot": "MoonShot",
+    "openrouter": "Open Router"
 }
 
 def get_llm_model(provider: str, **kwargs):
@@ -158,6 +166,29 @@ def get_llm_model(provider: str, **kwargs):
             base_url=os.getenv("MOONSHOT_ENDPOINT"),
             api_key=os.getenv("MOONSHOT_API_KEY"),
         )
+    elif provider == "openrouter":
+        if not kwargs.get("base_url", ""):
+            base_url = os.getenv("OPENROUTER_ENDPOINT", "https://openrouter.ai/api/v1")
+        else:
+            base_url = kwargs.get("base_url")
+
+        # Check if it's QWQ model which needs special handling
+        if "qwq" in kwargs.get("model_name", "").lower():
+            return QWQChatOpenAI(
+                model_name=kwargs.get("model_name", "qwen/qwq-32b"),
+                temperature=kwargs.get("temperature", 0.0),
+                base_url=base_url,
+                api_key=api_key,
+                http_referer="https://browser-use-webui.com",
+                x_title="Browser Use WebUI"
+            )
+        else:
+            return ChatOpenAI(
+                model=kwargs.get("model_name", "qwen/qwq-32b"),
+                temperature=kwargs.get("temperature", 0.0),
+                base_url=base_url,
+                api_key=api_key
+            )
     else:
         raise ValueError(f"Unsupported provider: {provider}")
 
@@ -172,6 +203,7 @@ model_names = {
     "mistral": ["pixtral-large-latest", "mistral-large-latest", "mistral-small-latest", "ministral-8b-latest"],
     "alibaba": ["qwen-plus", "qwen-max", "qwen-turbo", "qwen-long"],
     "moonshot": ["moonshot-v1-32k-vision-preview", "moonshot-v1-8k-vision-preview"],
+    "openrouter": ["qwen/qwq-32b", "anthropic/claude-3-5-sonnet", "anthropic/claude-3-opus"],
 }
 
 # Callback to update the model name dropdown based on the selected provider
@@ -195,11 +227,16 @@ def handle_api_key_error(provider: str, env_var: str):
     """
     Handles the missing API key error by raising a gr.Error with a clear message.
     """
-    provider_display = PROVIDER_DISPLAY_NAMES.get(provider, provider.upper())
-    raise gr.Error(
-        f"💥 {provider_display} API key not found! 🔑 Please set the "
-        f"`{env_var}` environment variable or provide it in the UI."
-    )
+    provider_name = PROVIDER_DISPLAY_NAMES.get(provider, provider.capitalize())
+    message = f"No API key found for {provider_name}. "
+    
+    if provider == "openrouter":
+        message += "Please set the OPENROUTER_API_KEY environment variable or provide it in the UI."
+    else:
+        message += f"Please set the {env_var} environment variable or provide it in the UI."
+    
+    logger.error(message)
+    raise ValueError(message)
 
 def encode_image(img_path):
     if not img_path:
@@ -265,3 +302,223 @@ async def capture_screenshot(browser_context):
         return encoded
     except Exception as e:
         return None
+
+def save_task(task_name, task_description, additional_info=""):
+    """
+    Save a task to a JSON file for later use.
+    
+    Args:
+        task_name (str): Name of the task to save
+        task_description (str): The task description
+        additional_info (str): Additional information for the task
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        # Create tasks directory if it doesn't exist
+        tasks_dir = os.path.join(os.getcwd(), "saved_tasks")
+        os.makedirs(tasks_dir, exist_ok=True)
+        
+        # Create the task data
+        task_data = {
+            "name": task_name,
+            "description": task_description,
+            "additional_info": additional_info,
+            "created_at": datetime.datetime.now().isoformat()
+        }
+        
+        # Save to file
+        filename = os.path.join(tasks_dir, f"{task_name.replace(' ', '_')}.json")
+        with open(filename, 'w') as f:
+            json.dump(task_data, f, indent=2)
+            
+        return True
+    except Exception as e:
+        logger.error(f"Error saving task: {str(e)}")
+        return False
+
+def load_tasks():
+    """
+    Load all saved tasks from the tasks directory.
+    
+    Returns:
+        list: List of task dictionaries
+    """
+    tasks = []
+    tasks_dir = os.path.join(os.getcwd(), "saved_tasks")
+    
+    # Create directory if it doesn't exist
+    if not os.path.exists(tasks_dir):
+        os.makedirs(tasks_dir, exist_ok=True)
+        return tasks
+    
+    try:
+        # Get all JSON files in the directory
+        task_files = glob.glob(os.path.join(tasks_dir, "*.json"))
+        
+        for file_path in task_files:
+            try:
+                with open(file_path, 'r') as f:
+                    task_data = json.load(f)
+                    tasks.append(task_data)
+            except Exception as e:
+                logger.error(f"Error loading task file {file_path}: {str(e)}")
+                continue
+                
+        # Sort tasks by creation date (newest first)
+        tasks.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+        return tasks
+    except Exception as e:
+        logger.error(f"Error loading tasks: {str(e)}")
+        return []
+
+def delete_task(task_name):
+    """
+    Delete a saved task.
+    
+    Args:
+        task_name (str): Name of the task to delete
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        tasks_dir = os.path.join(os.getcwd(), "saved_tasks")
+        filename = os.path.join(tasks_dir, f"{task_name.replace(' ', '_')}.json")
+        
+        if os.path.exists(filename):
+            os.remove(filename)
+            return True
+        return False
+    except Exception as e:
+        logger.error(f"Error deleting task: {str(e)}")
+        return False
+
+def save_playlist(playlist_name, task_ids, description=""):
+    """
+    Save a playlist of tasks to a JSON file.
+    
+    Args:
+        playlist_name (str): Name of the playlist
+        task_ids (list): List of task IDs/names in the playlist
+        description (str): Optional description of the playlist
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        # Create playlists directory if it doesn't exist
+        playlists_dir = os.path.join(os.getcwd(), "saved_playlists")
+        os.makedirs(playlists_dir, exist_ok=True)
+        
+        # Create the playlist data
+        playlist_data = {
+            "name": playlist_name,
+            "description": description,
+            "tasks": task_ids,
+            "created_at": datetime.datetime.now().isoformat(),
+            "updated_at": datetime.datetime.now().isoformat()
+        }
+        
+        # Save to file
+        filename = os.path.join(playlists_dir, f"{playlist_name.replace(' ', '_')}.json")
+        with open(filename, 'w') as f:
+            json.dump(playlist_data, f, indent=2)
+            
+        return True
+    except Exception as e:
+        logger.error(f"Error saving playlist: {str(e)}")
+        return False
+
+def load_playlists():
+    """
+    Load all saved playlists from the playlists directory.
+    
+    Returns:
+        list: List of playlist dictionaries
+    """
+    playlists = []
+    playlists_dir = os.path.join(os.getcwd(), "saved_playlists")
+    
+    # Create directory if it doesn't exist
+    if not os.path.exists(playlists_dir):
+        os.makedirs(playlists_dir, exist_ok=True)
+        return playlists
+    
+    try:
+        # Get all JSON files in the directory
+        playlist_files = glob.glob(os.path.join(playlists_dir, "*.json"))
+        
+        for file_path in playlist_files:
+            try:
+                with open(file_path, 'r') as f:
+                    playlist_data = json.load(f)
+                    playlists.append(playlist_data)
+            except Exception as e:
+                logger.error(f"Error loading playlist file {file_path}: {str(e)}")
+                continue
+                
+        # Sort playlists by creation date (newest first)
+        playlists.sort(key=lambda x: x.get("updated_at", ""), reverse=True)
+        return playlists
+    except Exception as e:
+        logger.error(f"Error loading playlists: {str(e)}")
+        return []
+
+def delete_playlist(playlist_name):
+    """
+    Delete a saved playlist.
+    
+    Args:
+        playlist_name (str): Name of the playlist to delete
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        playlists_dir = os.path.join(os.getcwd(), "saved_playlists")
+        filename = os.path.join(playlists_dir, f"{playlist_name.replace(' ', '_')}.json")
+        
+        if os.path.exists(filename):
+            os.remove(filename)
+            return True
+        return False
+    except Exception as e:
+        logger.error(f"Error deleting playlist: {str(e)}")
+        return False
+
+def update_playlist_order(playlist_name, new_task_order):
+    """
+    Update the order of tasks in a playlist.
+    
+    Args:
+        playlist_name (str): Name of the playlist to update
+        new_task_order (list): New order of task IDs
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        playlists_dir = os.path.join(os.getcwd(), "saved_playlists")
+        filename = os.path.join(playlists_dir, f"{playlist_name.replace(' ', '_')}.json")
+        
+        if not os.path.exists(filename):
+            return False
+            
+        # Load existing playlist
+        with open(filename, 'r') as f:
+            playlist_data = json.load(f)
+            
+        # Update task order and updated_at timestamp
+        playlist_data["tasks"] = new_task_order
+        playlist_data["updated_at"] = datetime.datetime.now().isoformat()
+        
+        # Save updated playlist
+        with open(filename, 'w') as f:
+            json.dump(playlist_data, f, indent=2)
+            
+        return True
+    except Exception as e:
+        logger.error(f"Error updating playlist order: {str(e)}")
+        return False

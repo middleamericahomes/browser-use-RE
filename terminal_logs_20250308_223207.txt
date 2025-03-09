@@ -1,0 +1,4 @@
+  File "/Users/sethdawson/Downloads/browser-use-RE/web-ui/webui.py", line 3310
+    """Get the global agent tracker instance"""
+                                            ^
+SyntaxError: unterminated triple-quoted string literal (detected at line 3318)

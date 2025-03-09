@@ -1,0 +1,4 @@
+  File "/Users/sethdawson/Downloads/browser-use-RE/web-ui/webui.py", line 1411
+    result = await agent_task
+             ^^^^^^^^^^^^^^^^
+SyntaxError: invalid syntax. Perhaps you forgot a comma?

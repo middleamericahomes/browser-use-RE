@@ -1,0 +1,4 @@
+  File "/Users/sethdawson/Downloads/browser-use-RE/web-ui/webui.py", line 1423
+    tool_calling_method=tool_calling_method
+                        ^^^^^^^^^^^^^^^^^^^
+SyntaxError: invalid syntax. Perhaps you forgot a comma?
